@@ -1,5 +1,5 @@
 [workspace]
 members = [
     "autumn-macro",
-    "autumn-api",
+    "autumn-core",
 ]
