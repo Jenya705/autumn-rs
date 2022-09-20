@@ -21,6 +21,7 @@ pub type AutumnResult<T> = Result<T, AutumnError>;
 
 #[derive(Default)]
 pub struct AutumnContext {
+    parent: Option<Arc<AutumnContext>>,
     bean_sources: HashMap<TypeId, AutumnBeanContainer<AutumnBeanSource>>,
 }
 
@@ -55,6 +56,12 @@ impl AutumnContext {
         self.bean_sources.get_mut(&type_id).unwrap()
     }
 
+    fn get_parent_bean_instance<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<Arc<B>> {
+        self.parent.as_ref()
+            .map(|parent| parent.get_bean_instance(name))
+            .unwrap_or_else(|| Err(AutumnError::bean_not_exist::<B>(name)))
+    }
+
     pub fn add_bean_instance<B: AutumnBean>(&mut self, bean: Arc<B>, name: Option<&'static str>) -> AutumnResult<()> {
         let bean_container = self.get_mut_bean_container::<B>();
         let bean_source = bean_container.get(&name);
@@ -84,7 +91,7 @@ impl AutumnContext {
                 Some(AutumnBeanSource::Creator(_)) | None => None,
             })
             .map(|arc| Ok(arc.clone().downcast().unwrap()))
-            .unwrap_or_else(|| Err(AutumnError::bean_not_exist::<B>(name)))
+            .unwrap_or_else(|| self.get_parent_bean_instance(name))
     }
 
     pub fn compute_bean_instance<B: AutumnBean>(&mut self, name: Option<&'static str>) -> AutumnResult<Arc<B>> {
@@ -94,40 +101,44 @@ impl AutumnContext {
                 match bean_source {
                     Some(AutumnBeanSource::Creator(_)) => match bean_container.remove(&name) {
                         Some(AutumnBeanSource::Creator(creator)) => creator,
-                        _ => panic!("Not possible"),
+                        _ => unreachable!("Not possible"),
                     }
                     Some(AutumnBeanSource::Instance(instance)) => return Ok(instance.clone().downcast().unwrap()),
-                    None => return Err(AutumnError::bean_not_exist::<B>(name))
+                    None => return self.get_parent_bean_instance(name)
                 }
             }
-            None => return Err(AutumnError::bean_not_exist::<B>(name)),
+            None => return self.get_parent_bean_instance(name),
         };
         creator(self)?;
         self.get_bean_instance(name)
     }
 
     pub fn compute_all_bean_instances(&mut self) -> AutumnResult<()> {
-        fn insert_creator_if_need(
-            creators: &mut Vec<AutumnBeanCreatorFn>,
-            bean_container: &mut AutumnBeanContainer<AutumnBeanSource>,
-            bean_name: Option<&'static str>,
-        ) {
-            if let Some(AutumnBeanSource::Creator(_)) = bean_container.get(&bean_name) {
-                creators.push(match bean_container.remove(&bean_name) {
-                    Some(AutumnBeanSource::Creator(creator)) => creator,
-                    _ => panic!("Not possible")
-                })
-            }
-        }
         let mut creators = Vec::new();
-        for (_, bean_container) in &mut self.bean_sources {
+        for (type_id, bean_container) in &mut self.bean_sources {
             let names = bean_container.names.iter().map(|(name, _)| *name).collect::<Vec<&str>>();
-            insert_creator_if_need(&mut creators, bean_container, None);
+            if let Some(AutumnBeanSource::Creator(_)) = bean_container.unnamed {
+                creators.push((type_id.clone(), None));
+            }
             for name in names {
-                insert_creator_if_need(&mut creators, bean_container, Some(name))
+                if let Some(AutumnBeanSource::Creator(_)) = bean_container.names.get(name) {
+                    creators.push((type_id.clone(), Some(name)));
+                }
             }
         }
-        for creator in creators {
+        for (type_id, name) in creators {
+            let creator = match self.bean_sources.get_mut(&type_id) {
+                Some(bean_container) => {
+                    match bean_container.get(&name) {
+                        Some(AutumnBeanSource::Creator(_)) => match bean_container.remove(&name) {
+                            Some(AutumnBeanSource::Creator(creator)) => creator,
+                            _ => unreachable!()
+                        },
+                        _ => continue
+                    }
+                },
+                None => continue
+            };
             creator(self)?;
         }
         Ok(())
