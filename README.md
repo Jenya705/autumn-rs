@@ -30,7 +30,7 @@ mod main {
     }
     
     #[autumn::schedule(interval = "500ms")]
-    pub async fn run(count_service: std::sync::Arc<CountService>) {
+    pub async fn run(count_service: &CountService) {
         println!("{}", count_service.increment())
     }
     
