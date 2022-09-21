@@ -6,7 +6,7 @@ use std::sync::Arc;
 pub trait AutumnBean: Any + Sync + Send + Debug {}
 
 pub trait AutumnBeanCreator<B: AutumnBean>: 'static {
-    fn create_instance(&self, context: &AutumnContext) -> AutumnResult<Arc<B>>;
+    fn create_instance(self, context: &mut AutumnContext) -> AutumnResult<Arc<B>>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,7 +75,8 @@ impl AutumnContext {
         let bean_container = self.get_mut_bean_container::<B>();
         let bean_name_fn = name.clone();
         let bean_creator_fn = move |autumn_context: &mut AutumnContext| {
-            autumn_context.add_bean_instance(creator.create_instance(autumn_context)?, bean_name_fn)
+            let instance = creator.create_instance(autumn_context)?;
+            autumn_context.add_bean_instance(instance, bean_name_fn)
         };
         let bean_source = bean_container.get(&name);
         match bean_source.is_none() {
@@ -101,7 +102,7 @@ impl AutumnContext {
                 match bean_source {
                     Some(AutumnBeanSource::Creator(_)) => match bean_container.remove(&name) {
                         Some(AutumnBeanSource::Creator(creator)) => creator,
-                        _ => unreachable!("Not possible"),
+                        _ => unreachable!(),
                     }
                     Some(AutumnBeanSource::Instance(instance)) => return Ok(instance.clone().downcast().unwrap()),
                     None => return self.get_parent_bean_instance(name)
@@ -136,7 +137,7 @@ impl AutumnContext {
                         },
                         _ => continue
                     }
-                },
+                }
                 None => continue
             };
             creator(self)?;
@@ -190,10 +191,24 @@ mod tests {
     impl AutumnBean for SimpleBean {}
 
     impl AutumnBeanCreator<SimpleBean> for SimpleBeanCreator {
-        fn create_instance(&self, _context: &AutumnContext) -> AutumnResult<Arc<SimpleBean>> {
+        fn create_instance(self, _context: &mut AutumnContext) -> AutumnResult<Arc<SimpleBean>> {
             Ok(Arc::new(SimpleBean {
                 some_counter: Mutex::new(32),
             }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct NeedItSelfBean;
+
+    struct NeedItSelfBeanCreator(Option<&'static str>);
+
+    impl AutumnBean for NeedItSelfBean {}
+
+    impl AutumnBeanCreator<NeedItSelfBean> for NeedItSelfBeanCreator {
+        fn create_instance(self, context: &mut AutumnContext) -> AutumnResult<Arc<NeedItSelfBean>> {
+            context.compute_bean_instance::<NeedItSelfBean>(self.0)?;
+            Ok(Arc::new(NeedItSelfBean))
         }
     }
 
@@ -222,5 +237,12 @@ mod tests {
         context.compute_all_bean_instances().unwrap();
         assert_eq!(*context.get_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
         assert_eq!(*context.compute_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
+    }
+
+    #[test]
+    fn bean_recursion_get_test() {
+        let mut context = AutumnContext::new();
+        context.add_bean_creator(NeedItSelfBeanCreator(None), None).unwrap();
+        assert_eq!(context.compute_all_bean_instances().is_err(), true)
     }
 }
