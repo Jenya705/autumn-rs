@@ -30,6 +30,12 @@ pub struct AutumnContext<'a> {
     bean_sources: HashMap<TypeId, AutumnBeanContainer<AutumnBeanSource<'a>>>,
 }
 
+#[derive(Clone)]
+pub enum AutumnContextReference<'a, 'c> {
+    Mutable(&'a mut AutumnContext<'c>),
+    Immutable(&'a AutumnContext<'c>),
+}
+
 type AutumnBeanCreatorFn = Box<dyn FnOnce(*mut ()) -> AutumnResult<()>>;
 
 enum AutumnBeanSource<'a> {
@@ -158,6 +164,29 @@ impl<'a> AutumnContext<'a> {
             self.call_creator(creator)?;
         }
         Ok(())
+    }
+}
+
+impl<'a, 'c> AutumnContextReference<'a, 'c> {
+    pub fn get_mut<'b>(&'b mut self) -> Option<&'b mut AutumnContext<'c>> {
+        match self {
+            Self::Mutable(mutable) => Some(*mutable),
+            Self::Immutable(_) => None,
+        }
+    }
+
+    pub fn get_ref<'b>(&'b mut self) -> &'b AutumnContext<'c> {
+        match self {
+            Self::Mutable(mutable) => *mutable,
+            Self::Immutable(immutable) => *immutable,
+        }
+    }
+
+    pub fn get_bean_instance<B: AutumnBean + 'c>(&mut self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+        match self {
+            Self::Mutable(mutable) => mutable.compute_bean_instance(name),
+            Self::Immutable(immutable) => immutable.get_bean_instance(name),
+        }
     }
 }
 
@@ -305,5 +334,4 @@ mod tests {
             context.compute_bean_instance::<SimpleBean>(None).unwrap() as *const SimpleBean,
         )
     }
-
 }
