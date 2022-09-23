@@ -30,7 +30,6 @@ pub struct AutumnContext<'a> {
     bean_sources: HashMap<TypeId, AutumnBeanContainer<AutumnBeanSource<'a>>>,
 }
 
-#[derive(Clone)]
 pub enum AutumnContextReference<'a, 'c> {
     Mutable(&'a mut AutumnContext<'c>),
     Immutable(&'a AutumnContext<'c>),
