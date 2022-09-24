@@ -5,7 +5,9 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-pub trait AutumnBean: Sync + Send + Debug {
+pub trait AutumnBean: AutumnIdentified + Sync + Send + Debug {}
+
+pub trait AutumnIdentified {
     /// This identifier will be used to get [std::any::TypeId] from
     type Identifier: Any;
 }
@@ -33,6 +35,10 @@ pub struct AutumnContext<'a> {
 pub enum AutumnContextReference<'a, 'c> {
     Mutable(&'a mut AutumnContext<'c>),
     Immutable(&'a AutumnContext<'c>),
+}
+
+impl AutumnIdentified for () {
+    type Identifier = ();
 }
 
 type AutumnBeanCreatorFn = Box<dyn FnOnce(*mut ()) -> AutumnResult<()>>;
@@ -244,9 +250,9 @@ mod tests {
 
     struct SimpleBeanCreator;
 
-    impl AutumnBean for SimpleBean {
-        type Identifier = SimpleBean;
-    }
+    impl AutumnIdentified for SimpleBean { type Identifier = SimpleBean; }
+
+    impl AutumnBean for SimpleBean {}
 
     impl AutumnBeanCreator<'_, SimpleBean> for SimpleBeanCreator {
         fn create_instance(self, _context: &mut AutumnContext) -> AutumnResult<Box<SimpleBean>> {
@@ -261,7 +267,9 @@ mod tests {
 
     struct NeedItSelfBeanCreator(Option<&'static str>);
 
-    impl AutumnBean for NeedItSelfBean {
+    impl AutumnBean for NeedItSelfBean {}
+
+    impl AutumnIdentified for NeedItSelfBean {
         type Identifier = NeedItSelfBean;
     }
 
@@ -277,7 +285,9 @@ mod tests {
 
     struct DependedBeanCreator;
 
-    impl<'a> AutumnBean for DependedBean<'a> {
+    impl<'a> AutumnBean for DependedBean<'a> {}
+
+    impl<'a> AutumnIdentified for DependedBean<'a> {
         type Identifier = DependedBean<'static>;
     }
 
