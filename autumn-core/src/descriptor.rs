@@ -2,6 +2,7 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ptr::{NonNull, null_mut};
+use std::sync::Arc;
 use crate::core::{AutumnContext, AutumnContextReference, AutumnIdentified, AutumnResult};
 
 pub trait AutumnBeanInstanceMethodType {
@@ -52,7 +53,11 @@ impl<'a, MT: AutumnBeanInstanceMethodType> AutumnBeanInstanceMethodDescriptor<'a
 }
 
 impl AutumnBeanInstanceDescriptor {
-    pub fn new() -> Self {
+    pub fn empty_arc() -> Arc<Self> {
+        Arc::new(Self::empty())
+    }
+
+    pub fn empty() -> Self {
         Default::default()
     }
 

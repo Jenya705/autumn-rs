@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use crate::descriptor::AutumnBeanInstanceDescriptor;
 
 pub trait AutumnBean: AutumnIdentified + Sync + Send + Debug {}
 
@@ -13,7 +14,12 @@ pub trait AutumnIdentified {
 }
 
 pub trait AutumnBeanCreator<'a, B: AutumnBean + 'a>: 'static {
-    fn create_instance(self, context: &mut AutumnContext<'a>) -> AutumnResult<Box<B>>;
+    fn create_instance(self, context: &mut AutumnContext<'a>) -> AutumnResult<AutumnBeanCreationData<B>>;
+}
+
+pub struct AutumnBeanCreationData<B> {
+    pub bean: Box<B>,
+    pub descriptor: Arc<AutumnBeanInstanceDescriptor>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,13 +49,19 @@ impl AutumnIdentified for () {
 
 type AutumnBeanCreatorFn = Box<dyn FnOnce(*mut ()) -> AutumnResult<()>>;
 
-enum AutumnBeanSource<'a> {
-    Creator(AutumnBeanCreatorFn, PhantomData<&'a ()>),
-    Instance(AutumnBeanInstance<'a>),
+pub struct AutumnBeanInstance<'a, B: AutumnBean> {
+    pub instance: &'a B,
+    pub descriptor: Arc<AutumnBeanInstanceDescriptor>,
 }
 
-struct AutumnBeanInstance<'a> {
+enum AutumnBeanSource<'a> {
+    Creator(AutumnBeanCreatorFn, PhantomData<&'a ()>),
+    Instance(AutumnBeanInstanceInner<'a>),
+}
+
+struct AutumnBeanInstanceInner<'a> {
     ptr: NonNull<()>,
+    descriptor: Arc<AutumnBeanInstanceDescriptor>,
     _pa: PhantomData<&'a ()>,
 }
 
@@ -77,7 +89,7 @@ impl<'a> AutumnContext<'a> {
         self.bean_sources.get_mut(&type_id).unwrap()
     }
 
-    fn get_parent_bean_instance<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+    fn get_parent_bean_instance<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'a, B>> {
         self.parent.as_ref()
             .map(|parent| parent.get_bean_instance(name))
             .unwrap_or_else(|| Err(AutumnError::bean_not_exist::<B>(name)))
@@ -87,11 +99,12 @@ impl<'a> AutumnContext<'a> {
         creator(self as *mut Self as *mut ())
     }
 
-    pub fn add_bean_instance<B: AutumnBean + 'a>(&mut self, bean: Box<B>, name: Option<&'static str>) -> AutumnResult<()> {
+    pub fn add_bean_instance<B: AutumnBean + 'a>(&mut self, bean: Box<B>, name: Option<&'static str>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> AutumnResult<()> {
         let bean_container = self.get_mut_bean_container::<B>();
         let bean_source = bean_container.get(&name);
         match bean_source {
-            Some(AutumnBeanSource::Creator(..)) | None => Ok(bean_container.replace(AutumnBeanSource::Instance(AutumnBeanInstance::new(bean)), &name)),
+            Some(AutumnBeanSource::Creator(..)) | None => Ok(bean_container.replace(
+                AutumnBeanSource::Instance(AutumnBeanInstanceInner::new(bean, descriptor)), &name)),
             Some(AutumnBeanSource::Instance(_)) => Err(AutumnError::BeanAlreadyExist)
         }
     }
@@ -102,8 +115,8 @@ impl<'a> AutumnContext<'a> {
         // Safety. This function will be executed only for this context, so its lifetime will be 'a
         let bean_creator_fn = move |autumn_context: *mut ()| unsafe {
             let autumn_context = (autumn_context as *mut AutumnContext<'a>).as_mut().unwrap();
-            let instance = creator.create_instance(autumn_context)?;
-            autumn_context.add_bean_instance(instance, bean_name_fn)
+            let creation_data = creator.create_instance(autumn_context)?;
+            autumn_context.add_bean_instance(creation_data.bean, bean_name_fn, creation_data.descriptor)
         };
         let bean_source = bean_container.get(&name);
         match bean_source.is_none() {
@@ -112,16 +125,20 @@ impl<'a> AutumnContext<'a> {
         }
     }
 
-    pub fn get_bean_instance<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+    pub fn get_bean_instance<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'a, B>> {
         self.bean_sources.get(&TypeId::of::<B::Identifier>())
             .and_then(|bean_container| match bean_container.get(&name) {
-                Some(AutumnBeanSource::Instance(ref instance)) => Some(Ok(unsafe { instance.get::<B>() })),
+                Some(AutumnBeanSource::Instance(ref instance)) => Some(Ok(unsafe { instance.get_outer::<B>() })),
                 Some(AutumnBeanSource::Creator(..)) | None => None,
             })
             .unwrap_or_else(|| self.get_parent_bean_instance(name))
     }
 
-    pub fn compute_bean_instance<B: AutumnBean>(&mut self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+    pub fn get_bean_instance_reference<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+        self.get_bean_instance(name).map(|bean_instance| bean_instance.instance)
+    }
+
+    pub fn compute_bean_instance<B: AutumnBean>(&mut self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'a, B>> {
         let creator = match self.bean_sources.get_mut(&TypeId::of::<B::Identifier>()) {
             Some(bean_container) => {
                 let bean_source = bean_container.get(&name);
@@ -130,7 +147,7 @@ impl<'a> AutumnContext<'a> {
                         Some(AutumnBeanSource::Creator(creator, _)) => creator,
                         _ => unreachable!(),
                     }
-                    Some(AutumnBeanSource::Instance(instance)) => return Ok(unsafe { instance.get::<B>() }),
+                    Some(AutumnBeanSource::Instance(instance)) => return Ok(unsafe { instance.get_outer::<B>() }),
                     None => return self.get_parent_bean_instance(name)
                 }
             }
@@ -138,6 +155,10 @@ impl<'a> AutumnContext<'a> {
         };
         self.call_creator(creator)?;
         self.get_bean_instance(name)
+    }
+
+    pub fn compute_bean_instance_reference<B: AutumnBean>(&mut self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+        self.compute_bean_instance(name).map(|bean_instance| bean_instance.instance)
     }
 
     pub fn compute_all_bean_instances(&mut self) -> AutumnResult<()> {
@@ -187,24 +208,36 @@ impl<'a, 'c> AutumnContextReference<'a, 'c> {
         }
     }
 
-    pub fn get_bean_instance<B: AutumnBean + 'c>(&mut self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+    pub fn get_bean_instance<B: AutumnBean + 'c>(&mut self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'a, B>> {
         match self {
             Self::Mutable(mutable) => mutable.compute_bean_instance(name),
             Self::Immutable(immutable) => immutable.get_bean_instance(name),
         }
     }
+
+    pub fn get_bean_instance_reference<B: AutumnBean + 'c>(&mut self, name: Option<&'static str>) -> AutumnResult<&'a B> {
+        self.get_bean_instance(name).map(|bean_instance| bean_instance.instance)
+    }
 }
 
-impl<'a> AutumnBeanInstance<'a> {
-    pub fn new<B>(bean: Box<B>) -> Self {
+impl<'a> AutumnBeanInstanceInner<'a> {
+    pub fn new<B>(bean: Box<B>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> Self {
         Self {
             ptr: unsafe { NonNull::new_unchecked(Box::into_raw(bean) as *mut ()) },
+            descriptor,
             _pa: PhantomData,
         }
     }
 
-    pub unsafe fn get<B>(&self) -> &'a B {
+    pub unsafe fn get_reference<B>(&self) -> &'a B {
         &*(self.ptr.as_ptr() as *const B)
+    }
+
+    pub unsafe fn get_outer<B: AutumnBean>(&self) -> AutumnBeanInstance<'a, B> {
+        AutumnBeanInstance {
+            instance: self.get_reference(),
+            descriptor: self.descriptor.clone(),
+        }
     }
 }
 
@@ -255,10 +288,13 @@ mod tests {
     impl AutumnBean for SimpleBean {}
 
     impl AutumnBeanCreator<'_, SimpleBean> for SimpleBeanCreator {
-        fn create_instance(self, _context: &mut AutumnContext) -> AutumnResult<Box<SimpleBean>> {
-            Ok(Box::new(SimpleBean {
-                some_counter: Mutex::new(32),
-            }))
+        fn create_instance(self, _context: &mut AutumnContext) -> AutumnResult<AutumnBeanCreationData<SimpleBean>> {
+            Ok(AutumnBeanCreationData {
+                bean: Box::new(SimpleBean {
+                    some_counter: Mutex::new(32),
+                }),
+                descriptor: AutumnBeanInstanceDescriptor::empty_arc(),
+            })
         }
     }
 
@@ -274,9 +310,12 @@ mod tests {
     }
 
     impl AutumnBeanCreator<'_, NeedItSelfBean> for NeedItSelfBeanCreator {
-        fn create_instance(self, context: &mut AutumnContext) -> AutumnResult<Box<NeedItSelfBean>> {
-            context.compute_bean_instance::<NeedItSelfBean>(self.0)?;
-            Ok(Box::new(NeedItSelfBean))
+        fn create_instance(self, context: &mut AutumnContext) -> AutumnResult<AutumnBeanCreationData<NeedItSelfBean>> {
+            context.compute_bean_instance_reference::<NeedItSelfBean>(self.0)?;
+            Ok(AutumnBeanCreationData {
+                bean: Box::new(NeedItSelfBean),
+                descriptor: AutumnBeanInstanceDescriptor::empty_arc(),
+            })
         }
     }
 
@@ -292,10 +331,13 @@ mod tests {
     }
 
     impl<'a> AutumnBeanCreator<'a, DependedBean<'a>> for DependedBeanCreator {
-        fn create_instance(self, context: &mut AutumnContext<'a>) -> AutumnResult<Box<DependedBean<'a>>> {
-            Ok(Box::new(DependedBean(
-                context.compute_bean_instance::<SimpleBean>(None)?
-            )))
+        fn create_instance(self, context: &mut AutumnContext<'a>) -> AutumnResult<AutumnBeanCreationData<DependedBean<'a>>> {
+            Ok(AutumnBeanCreationData {
+                bean: Box::new(DependedBean(
+                    context.compute_bean_instance_reference::<SimpleBean>(None)?
+                )),
+                descriptor: AutumnBeanInstanceDescriptor::empty_arc(),
+            })
         }
     }
 
@@ -304,17 +346,17 @@ mod tests {
         let mut context = AutumnContext::new();
         context.add_bean_instance(Box::new(SimpleBean {
             some_counter: Mutex::new(0),
-        }), None).unwrap();
-        *context.get_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap() += 1;
-        assert_eq!(*context.get_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 1);
+        }), None, AutumnBeanInstanceDescriptor::empty_arc()).unwrap();
+        *context.get_bean_instance_reference::<SimpleBean>(None).unwrap().some_counter.lock().unwrap() += 1;
+        assert_eq!(*context.get_bean_instance_reference::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 1);
     }
 
     #[test]
     fn bean_compute_test() {
         let mut context = AutumnContext::new();
         context.add_bean_creator(SimpleBeanCreator {}, None).unwrap();
-        assert_eq!(context.get_bean_instance::<SimpleBean>(None).is_err(), true);
-        assert_eq!(*context.compute_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
+        assert_eq!(context.get_bean_instance_reference::<SimpleBean>(None).is_err(), true);
+        assert_eq!(*context.compute_bean_instance_reference::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
     }
 
     #[test]
@@ -322,8 +364,8 @@ mod tests {
         let mut context = AutumnContext::new();
         context.add_bean_creator(SimpleBeanCreator {}, None).unwrap();
         context.compute_all_bean_instances().unwrap();
-        assert_eq!(*context.get_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
-        assert_eq!(*context.compute_bean_instance::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
+        assert_eq!(*context.get_bean_instance_reference::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
+        assert_eq!(*context.compute_bean_instance_reference::<SimpleBean>(None).unwrap().some_counter.lock().unwrap(), 32);
     }
 
     #[test]
@@ -339,8 +381,8 @@ mod tests {
         context.add_bean_creator(DependedBeanCreator, None).unwrap();
         context.add_bean_creator(SimpleBeanCreator, None).unwrap();
         assert_eq!(
-            context.compute_bean_instance::<DependedBean>(None).unwrap().0 as *const SimpleBean,
-            context.compute_bean_instance::<SimpleBean>(None).unwrap() as *const SimpleBean,
+            context.compute_bean_instance_reference::<DependedBean>(None).unwrap().0 as *const SimpleBean,
+            context.compute_bean_instance_reference::<SimpleBean>(None).unwrap() as *const SimpleBean,
         )
     }
 }
