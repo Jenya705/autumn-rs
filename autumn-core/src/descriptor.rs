@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
-use crate::core::{AutumnContext, AutumnContextReference, AutumnIdentified, AutumnResult};
+use crate::core::{AutumnBean, AutumnContext, AutumnContextReference, AutumnIdentified, AutumnResult};
 
 pub trait AutumnBeanInstanceMethodType {
     type Parameters: AutumnIdentified;
@@ -27,10 +27,29 @@ pub struct AutumnBeanInstanceDescriptor {
     methods: HashMap<TypeId, Vec<AutumnBeanInstanceMethodDescriptorInner>>,
 }
 
+#[derive(Clone, Copy)]
 pub struct AutumnBeanInstanceMethodReference {
     mutable: bool,
     bean: NonNull<()>,
     context: NonNull<()>,
+}
+
+impl AutumnBeanInstanceMethodReference {
+    pub fn new_mut<B: AutumnBean>(bean: &B, context: &mut AutumnContext) -> Self {
+        Self {
+            mutable: true,
+            bean: unsafe { NonNull::new_unchecked(bean as *const B as *mut ()) },
+            context: unsafe { NonNull::new_unchecked(context as *mut AutumnContext as *mut ()) },
+        }
+    }
+
+    pub fn new<B: AutumnBean>(bean: &B, context: &AutumnContext) -> Self {
+        Self {
+            mutable: false,
+            bean: unsafe { NonNull::new_unchecked(bean as *const B as *mut ()) },
+            context: unsafe { NonNull::new_unchecked(context as *const AutumnContext as *mut ()) },
+        }
+    }
 }
 
 impl<'a, MT: AutumnBeanInstanceMethodType> AutumnBeanInstanceMethodDescriptor<'a, MT> {
