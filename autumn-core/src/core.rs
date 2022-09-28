@@ -45,10 +45,6 @@ pub enum AutumnContextReference<'a, 'c> {
     Immutable(&'a AutumnContext<'c>),
 }
 
-impl AutumnIdentified for () {
-    type Identifier = ();
-}
-
 type AutumnBeanCreatorFn = Box<dyn FnOnce(*mut ()) -> AutumnResult<()>>;
 
 pub struct AutumnBeanInstance<'a, B: AutumnBean> {
@@ -102,28 +98,28 @@ impl<'a> AutumnContext<'a> {
     }
 
     pub fn add_bean_instance<B: AutumnBean + 'a>(&mut self, bean: Box<B>, name: Option<&'static str>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> AutumnResult<()> {
-        unsafe { self.add_pointer_bean_instance(Box::into_raw(bean), name, descriptor) }
+        unsafe { self.add_pointer_bean_instance(NonNull::new_unchecked(Box::into_raw(bean)), name, descriptor) }
     }
 
-    pub unsafe fn add_reference_bean_instance<B: AutumnBean + 'a>(&mut self, bean: &'a B, name: Option<&'static str>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> AutumnResult<()> {
-        self.add_pointer_bean_instance(bean as *const B as *mut B, name, descriptor)
+    pub fn add_reference_bean_instance<B: AutumnBean + 'a>(&mut self, bean: &'a B, name: Option<&'static str>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> AutumnResult<()> {
+        unsafe { self.add_pointer_bean_instance(NonNull::new_unchecked(bean as *const B as *mut B), name, descriptor) }
     }
 
-    pub unsafe fn add_pointer_bean_instance<B: AutumnBean + 'a>(&mut self, bean: *mut B, name: Option<&'static str>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> AutumnResult<()> {
-        let self_ptr = NonNull::new_unchecked(bean as *mut ());
+    pub unsafe fn add_pointer_bean_instance<B: AutumnBean + 'a>(&mut self, bean: NonNull<B>, name: Option<&'static str>, descriptor: Arc<AutumnBeanInstanceDescriptor>) -> AutumnResult<()> {
+        let bean = bean.cast();
         for (param_ty, method_descriptors) in &descriptor.methods {
             let methods = self.context_descriptor.methods
                 .entry(*param_ty)
                 .or_insert_with(|| Vec::new());
             for method_descriptor in method_descriptors {
-                methods.push((self_ptr, *method_descriptor))
+                methods.push((bean, *method_descriptor))
             }
         }
         let bean_container = self.get_mut_bean_container::<B>();
         let bean_source = bean_container.get(&name);
         match bean_source {
             Some(AutumnBeanSource::Creator(..)) | None => Ok(bean_container.replace(
-                AutumnBeanSource::Instance(AutumnBeanInstanceInner::new(self_ptr, descriptor)), &name)),
+                AutumnBeanSource::Instance(AutumnBeanInstanceInner::new(bean, descriptor)), &name)),
             Some(AutumnBeanSource::Instance(_)) => Err(AutumnError::BeanAlreadyExist)
         }
     }
@@ -212,13 +208,13 @@ impl<'a> AutumnContext<'a> {
     }
 
     pub fn get_methods<'b, MT: AutumnBeanInstanceMethodType>(&'b self) -> impl Iterator<Item=AutumnBeanInstanceMethodCall<'b, 'a, MT>> {
-        self.context_descriptor.methods.get(&TypeId::of::<<MT::Parameters as AutumnIdentified>::Identifier>())
+        self.context_descriptor.methods.get(&TypeId::of::<MT::Identifier>())
             .map(|methods| methods.iter()
                 .map(|(bean, descriptor)| AutumnBeanInstanceMethodCall {
                     reference: AutumnBeanInstanceMethodReference {
                         mutable: false,
                         bean: *bean,
-                        context: unsafe { NonNull::new_unchecked(self as *const Self as *mut Self as *mut ()) },
+                        context: unsafe { NonNull::new_unchecked(self as *const Self as *mut ()) },
                     },
                     descriptor: AutumnBeanInstanceMethodDescriptor::<MT>::ref_cast(descriptor),
                     pt: PhantomData,

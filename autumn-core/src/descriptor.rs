@@ -6,10 +6,10 @@ use std::sync::Arc;
 use ref_cast::RefCast;
 use crate::core::{AutumnBean, AutumnContext, AutumnContextReference, AutumnIdentified, AutumnResult};
 
-pub trait AutumnBeanInstanceMethodType {
-    type Parameters: AutumnIdentified;
+pub trait AutumnBeanInstanceMethodType: AutumnIdentified {
+    type Parameters;
 
-    type Arguments: AutumnIdentified;
+    type Arguments;
 }
 
 pub struct AutumnBeanInstanceMethodCall<'a, 'c, MT: AutumnBeanInstanceMethodType> {
@@ -29,7 +29,7 @@ pub struct AutumnBeanInstanceMethodDescriptorInner {
     parameters: NonNull<()>,
     method: fn(
         &AutumnBeanInstanceMethodReference,
-        *const (), // Arguments is shared between calls and allocated in the heap of calling function
+        *const (), // Arguments
     ) -> AutumnResult<()>,
 }
 
@@ -76,7 +76,31 @@ impl AutumnBeanInstanceMethodReference {
         }
     }
 
+    unsafe fn unsafe_mut<'a, 'c, B>(&self) -> (&'c B, &'a mut AutumnContext<'c>) {
+        let bean = &*(self.bean.as_ptr() as *const B);
+        let context = &mut *(self.context.as_ptr() as *mut AutumnContext<'c>);
+        (bean, context)
+    }
 
+    pub fn as_mut<'a, 'c, B>(&self) -> Option<(&'c B, &'a mut AutumnContext<'c>)> {
+        match self.mutable {
+            true => Some(unsafe { self.unsafe_mut() }),
+            false => None,
+        }
+    }
+
+    pub fn as_ref<'a, 'c, B>(&self) -> (&'c B, &'a AutumnContext<'c>) {
+        let (bean, context) = unsafe { self.unsafe_mut() };
+        (bean, context)
+    }
+
+    pub fn as_unknown_ref<'a, 'c, B>(&self) -> (&'c B, AutumnContextReference<'a, 'c>) {
+        let (bean, context) = unsafe { self.unsafe_mut() };
+        (bean, match self.mutable {
+            true => AutumnContextReference::Mutable(context),
+            false => AutumnContextReference::Immutable(context),
+        })
+    }
 }
 
 impl<'a, MT: AutumnBeanInstanceMethodType> AutumnBeanInstanceMethodDescriptor<MT> {
@@ -104,46 +128,19 @@ impl AutumnBeanInstanceDescriptor {
         Default::default()
     }
 
-    pub fn get_method_descriptors<MT: AutumnBeanInstanceMethodType>(&self) -> Option<impl Iterator<Item=&AutumnBeanInstanceMethodDescriptor<MT>>> {
-        self.methods.get(&TypeId::of::<<MT::Parameters as AutumnIdentified>::Identifier>())
+    pub fn get_method_descriptors<MT: AutumnBeanInstanceMethodType>(&self) -> impl Iterator<Item=&AutumnBeanInstanceMethodDescriptor<MT>> {
+        self.methods.get(&TypeId::of::<MT::Identifier>())
             .map(|descriptors| descriptors.iter()
                 .map(|descriptor| AutumnBeanInstanceMethodDescriptor::<MT>::ref_cast(descriptor))
             )
+            .into_iter()
+            .flatten()
     }
 
     pub fn add_method_descriptor<MT: AutumnBeanInstanceMethodType>(&mut self, method_descriptor: AutumnBeanInstanceMethodDescriptor<MT>) {
-        self.methods.entry(TypeId::of::<<MT::Parameters as AutumnIdentified>::Identifier>())
+        self.methods.entry(TypeId::of::<MT::Identifier>())
             .or_insert_with(|| Vec::new())
             .push(method_descriptor.0)
-    }
-}
-
-impl AutumnBeanInstanceMethodReference {
-    unsafe fn unsafe_mut<'a, 'c, B>(&self) -> (&'c B, &'a mut AutumnContext<'c>) {
-        let bean = &*(self.bean.as_ptr() as *const B);
-        let context = &mut *(self.context.as_ptr() as *mut AutumnContext<'c>);
-        (bean, context)
-    }
-
-    pub fn as_mut<'a, 'c, B>(&self) -> Option<(&'c B, &'a mut AutumnContext<'c>)> {
-        match self.mutable {
-            true => Some(unsafe { self.unsafe_mut() }),
-            false => None,
-        }
-    }
-
-    pub fn as_ref<'a, 'c, B>(&self) -> (&'c B, &'a AutumnContext<'c>) {
-        let (bean, context) = unsafe { self.unsafe_mut() };
-        (bean, context)
-    }
-
-    pub fn as_unknown_ref<'a, 'c, B>(&self) -> (&'c B, AutumnContextReference<'a, 'c>) {
-        let mutable = self.mutable;
-        let (bean, context) = unsafe { self.unsafe_mut() };
-        (bean, match mutable {
-            true => AutumnContextReference::Mutable(context),
-            false => AutumnContextReference::Immutable(context),
-        })
     }
 }
 
