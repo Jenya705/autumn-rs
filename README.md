@@ -42,3 +42,41 @@ pub use main::*;
 fn main() {}
 
 ```
+
+`output`
+
+```
+mod main {
+
+    pub struct CountService {
+        counter: std::sync::Mutex<i32>,
+    }
+    
+    impl AutumnBean for CountService {}
+    
+    impl AutumnIdentified for CountService {
+        type Identifier = CountService;
+    }
+
+    impl CountService {
+        pub fn new() -> Self {
+            Self {
+                counter: std::sync::Mutex::new(0),
+            }
+        }
+
+        pub fn increment(&self) -> i32 {
+            let mut value = self.counter.lock().unwrap();
+            let ret = value;
+            *value += 1;
+            ret
+        }
+    }
+    
+    #[autumn::schedule(interval = "500ms")]
+    pub async fn run(count_service: &CountService) {
+        println!("{}", count_service.increment())
+    }
+
+}
+```
