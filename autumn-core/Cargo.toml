@@ -1,6 +1,8 @@
 [package]
-name = "autumn"
+name = "autumn-core"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+thiserror = "1.0.37"
+async-trait = "0.1.57"

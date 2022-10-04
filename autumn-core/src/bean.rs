@@ -1,6 +1,7 @@
 use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::ptr::NonNull;
+use crate::ptr::UnknownPointer;
 
 pub trait AutumnBean: AutumnIdentified + Sync {}
 
@@ -8,37 +9,93 @@ pub trait AutumnIdentified {
     type Identifier: Any;
 }
 
-pub const fn autumn_id<T: AutumnIdentified>() -> TypeId {
+pub fn autumn_id<T: AutumnIdentified>() -> TypeId {
     TypeId::of::<T::Identifier>()
 }
 
 #[repr(transparent)]
-pub struct AutumnBeanInstance<'c, T>(
-    pub(crate) AutumnBeanInstanceInner<'c>,
-    pub(crate) PhantomData<T>,
-);
-
-#[derive(Clone, Copy)]
-pub(crate) struct AutumnBeanInstanceInner<'c> {
-    pub(crate) instance_ptr: NonNull<()>,
+pub struct AutumnBeanInstance<'c, T> {
+    pub(crate) inner: AutumnBeanInstanceInner<'c>,
+    _marker: PhantomData<T>,
 }
 
-impl<'c> AutumnBeanInstanceInner<'c> {
-    pub const unsafe fn get_mut<T: AutumnBean>(&mut self) -> &'c mut T {
-        unsafe { self.instance_ptr.cast().as_mut() }
-    }
+pub(crate) struct AutumnBeanInstanceInner<'c> {
+    pub(crate) pointer: UnknownPointer,
+    _marker: PhantomData<&'c ()>,
+}
 
-    pub const unsafe fn get_ref<T: AutumnBean>(&self) -> &'c T {
-        unsafe { self.instance_ptr.cast().as_ref() }
-    }
+#[repr(transparent)]
+pub struct AutumnBeanMap<T> {
+    map: HashMap<TypeId, AutumnBeanMapValue<T>>,
+}
+
+pub struct AutumnBeanMapValue<T> {
+    unnamed: Option<T>,
+    named: HashMap<&'static str, T>,
 }
 
 impl<'c, T> AutumnBeanInstance<'c, T> {
-    pub const fn get_mut(&mut self) -> &'c mut T {
-        unsafe { self.0.get_mut() }
+    pub(crate) unsafe fn new<'a>(inner: &'a AutumnBeanInstanceInner<'c>) -> &'a Self {
+        &*(inner as *const AutumnBeanInstanceInner<'c> as *const () as *const Self)
     }
 
-    pub const fn get_ref(&self) -> &'c T {
-        unsafe { self.0.get_ref() }
+    pub fn get(&self) -> &'c T {
+        unsafe { self.inner.pointer.get().cast().as_ref() }
+    }
+}
+
+impl<'c> AutumnBeanInstanceInner<'c> {
+    pub(crate) fn new(pointer: UnknownPointer) -> Self {
+        Self {
+            pointer,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> AutumnBeanMap<T> {
+    pub fn get_mut<B: AutumnIdentified>(&mut self) -> &mut AutumnBeanMapValue<T> {
+        self.map.entry(autumn_id::<B>()).or_insert_with(|| AutumnBeanMapValue::new())
+    }
+
+    pub fn get<B: AutumnIdentified>(&self) -> Option<&AutumnBeanMapValue<T>> {
+        self.map.get(&autumn_id::<B>())
+    }
+}
+
+impl<T> AutumnBeanMapValue<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            unnamed: None,
+            named: HashMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, name: Option<&'static str>, value: T) -> Option<T> {
+        match name {
+            Some(name) => self.named.insert(name, value),
+            None => self.unnamed.replace(value),
+        }
+    }
+
+    pub fn get(&self, name: Option<&'static str>) -> Option<&T> {
+        match name {
+            Some(name) => self.named.get(name),
+            None => self.unnamed.as_ref(),
+        }
+    }
+
+    pub fn get_mut(&mut self, name: Option<&'static str>) -> Option<&mut T> {
+        match name {
+            Some(name) => self.named.get_mut(name),
+            None => self.unnamed.as_mut(),
+        }
+    }
+
+    pub fn remove(&mut self, name: Option<&'static str>) -> Option<T> {
+        match name {
+            Some(name) => self.named.remove(name),
+            None => self.unnamed.take()
+        }
     }
 }
