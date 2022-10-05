@@ -1,6 +1,7 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::ptr::NonNull;
 use crate::ptr::UnknownPointer;
 
 pub trait AutumnBean: AutumnIdentified + Sync {}
@@ -15,8 +16,8 @@ pub fn autumn_id<T: AutumnIdentified>() -> TypeId {
 
 #[repr(transparent)]
 pub struct AutumnBeanInstance<'c, T> {
-    pub(crate) inner: AutumnBeanInstanceInner<'c>,
-    _marker: PhantomData<T>,
+    pub(crate) instance: NonNull<T>,
+    _marker: PhantomData<&'c ()>,
 }
 
 pub(crate) struct AutumnBeanInstanceInner<'c> {
@@ -35,12 +36,15 @@ pub struct AutumnBeanMapValue<T> {
 }
 
 impl<'c, T> AutumnBeanInstance<'c, T> {
-    pub(crate) unsafe fn new<'a>(inner: &'a AutumnBeanInstanceInner<'c>) -> &'a Self {
-        &*(inner as *const AutumnBeanInstanceInner<'c> as *const () as *const Self)
+    pub(crate) unsafe fn new<'a>(inner: &'a AutumnBeanInstanceInner<'c>) -> Self {
+        Self {
+            instance: inner.pointer.get().cast(),
+            _marker: PhantomData
+        }
     }
 
     pub fn get(&self) -> &'c T {
-        unsafe { self.inner.pointer.get().cast().as_ref() }
+        unsafe { self.instance.as_ref() }
     }
 }
 

@@ -11,7 +11,7 @@ impl UnknownPointer {
         Self {
             pointer: pointer.cast(),
             // Safety. We are casting fn(*mut T) to the fn(*mut ()) what is the same.
-            destructor: unsafe { std::mem::transmute(std::ptr::drop_in_place::<T> as *mut ()) }
+            destructor: unsafe { std::mem::transmute(std::ptr::drop_in_place::<T> as *mut ()) },
         }
     }
 
@@ -27,3 +27,5 @@ impl Drop for UnknownPointer {
         drop(unsafe { Box::from_raw(pointer) })
     }
 }
+
+unsafe impl Send for UnknownPointer {}
