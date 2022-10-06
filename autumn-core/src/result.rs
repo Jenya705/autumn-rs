@@ -1,4 +1,4 @@
-#[derive(Debug, thiserror::Error)]
+#[derive(PartialEq, Debug, thiserror::Error)]
 pub enum AutumnError {
     #[error("Bean does not exist")]
     BeanNotExist,

@@ -5,3 +5,5 @@ pub mod bean;
 pub mod context;
 pub mod result;
 pub mod creator;
+#[cfg(test)]
+mod test;

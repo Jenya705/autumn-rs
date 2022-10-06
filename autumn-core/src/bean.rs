@@ -39,7 +39,7 @@ impl<'c, T> AutumnBeanInstance<'c, T> {
     pub(crate) unsafe fn new<'a>(inner: &'a AutumnBeanInstanceInner<'c>) -> Self {
         Self {
             instance: inner.pointer.get().cast(),
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 
@@ -58,6 +58,10 @@ impl<'c> AutumnBeanInstanceInner<'c> {
 }
 
 impl<T> AutumnBeanMap<T> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     pub fn get_mut<B: AutumnIdentified>(&mut self) -> &mut AutumnBeanMapValue<T> {
         self.map.entry(autumn_id::<B>()).or_insert_with(|| AutumnBeanMapValue::new())
     }
@@ -67,12 +71,15 @@ impl<T> AutumnBeanMap<T> {
     }
 }
 
+impl<T> Default for AutumnBeanMap<T> {
+    fn default() -> Self {
+        Self { map: HashMap::new() }
+    }
+}
+
 impl<T> AutumnBeanMapValue<T> {
     pub(crate) fn new() -> Self {
-        Self {
-            unnamed: None,
-            named: HashMap::new(),
-        }
+        Default::default()
     }
 
     pub fn insert(&mut self, name: Option<&'static str>, value: T) -> Option<T> {
@@ -100,6 +107,15 @@ impl<T> AutumnBeanMapValue<T> {
         match name {
             Some(name) => self.named.remove(name),
             None => self.unnamed.take()
+        }
+    }
+}
+
+impl<T> Default for AutumnBeanMapValue<T> {
+    fn default() -> Self {
+        Self {
+            named: HashMap::new(),
+            unnamed: None,
         }
     }
 }

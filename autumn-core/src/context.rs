@@ -2,6 +2,7 @@ use crate::bean::{AutumnBean, AutumnBeanInstance, AutumnBeanInstanceInner, Autum
 use crate::creator::{AutumnBeanCreateData, AutumnBeanCreator, AutumnBeanCreatorInner, AutumnBeanCreatorInnerImpl};
 use crate::result::{AutumnError, AutumnResult};
 
+#[derive(Default)]
 pub struct AutumnContext<'c> {
     bean_states: AutumnBeanMap<AutumnBeanState<'c>>,
 }
@@ -12,7 +13,16 @@ pub(crate) enum AutumnBeanState<'c> {
 }
 
 impl<'c> AutumnContext<'c> {
-    pub fn get_bean_instance<B: AutumnBean>(&self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'c, B>> {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /**
+    About this method safety:
+    If B lifetime given as 'static but actually not 'static, it will be problem because we can not check this situations, yet
+    Is it better to move on rc/arc?
+    */
+    pub fn get_bean_instance<B: AutumnBean + 'c>(&self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'c, B>> {
         self.bean_states.get::<B>()
             .and_then(|value| value.get(name))
             .and_then(|state| match state {
@@ -23,7 +33,7 @@ impl<'c> AutumnContext<'c> {
             .ok_or(AutumnError::BeanNotExist)
     }
 
-    pub fn add_bean_instance<B: AutumnBean>(&mut self, name: Option<&'static str>, instance: AutumnBeanCreateData<'c, B>) -> AutumnResult<()> {
+    pub fn add_bean_instance<B: AutumnBean + 'c>(&mut self, name: Option<&'static str>, instance: AutumnBeanCreateData<'c, B>) -> AutumnResult<()> {
         let value = self.bean_states.get_mut::<B>();
         match value.get(name) {
             Some(AutumnBeanState::Instance(_)) => Err(AutumnError::BeanAlreadyExist),
@@ -34,7 +44,7 @@ impl<'c> AutumnContext<'c> {
         }
     }
 
-    pub async fn compute_bean_creator<B: AutumnBean>(&mut self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'c, B>> {
+    pub async fn compute_bean_instance<B: AutumnBean + 'c>(&mut self, name: Option<&'static str>) -> AutumnResult<AutumnBeanInstance<'c, B>> {
         let value = self.bean_states.get_mut::<B>();
         match value.get(name) {
             Some(AutumnBeanState::Instance(instance)) => return Ok(unsafe { AutumnBeanInstance::new(instance) }),
