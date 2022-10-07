@@ -60,3 +60,21 @@ fn try_reinsert_bean_test() {
     context.add_bean_instance(None, AutumnBeanCreateData::new(Box::new(CountService::new()))).unwrap();
     assert_eq!(context.add_bean_instance(None, AutumnBeanCreateData::new(Box::new(CountService::new()))).unwrap_err(), AutumnError::BeanAlreadyExist);
 }
+
+#[tokio::test]
+async fn recursive_dependency_test() {
+    struct RecursiveBean;
+    struct RecursiveBeanCreator;
+    impl AutumnBean for RecursiveBean {}
+    impl AutumnIdentified for RecursiveBean { type Identifier = RecursiveBean; }
+    #[crate::async_trait]
+    impl<'c> AutumnBeanCreator<'c, RecursiveBean> for RecursiveBeanCreator {
+        async fn create(&mut self, context: &mut AutumnContext<'c>) -> AutumnResult<AutumnBeanCreateData<'c, RecursiveBean>> {
+            context.compute_bean_instance::<RecursiveBean>(None).await.map(|_| AutumnBeanCreateData::new(Box::new(RecursiveBean)))
+        }
+    }
+
+    let mut context = AutumnContext::new();
+    context.add_bean_creator(None, RecursiveBeanCreator).unwrap();
+    assert_eq!(context.compute_bean_instance::<RecursiveBean>(None).await.map(|_| panic!()).unwrap_err(), AutumnError::BeanNotExist);
+}
